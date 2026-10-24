@@ -181,9 +181,9 @@ fn roll_reply(handle: &str, arg: &str) -> Option<String> {
         }
     }
     Some(format!(
-        "🎲 {who} rolled {}: {} (total {total})",
+        "🎲 {who} rolled {}:\n{}\n(total {total})",
         spec.join(" + "),
-        parts.join(" | ")
+        parts.join("\n")
     ))
 }
 
