@@ -4,6 +4,7 @@
 //!   `!roll d20`  → one twenty-sided die
 //!   `!roll 20`   → same (bare sides)
 //!   `!roll 2d6`  → two six-sided dice, shown individually + total
+//!   `!roll 5d20 3d3` → several groups, each with its own total + the sum
 //!   `!coinflip`  → heads or tails
 //!
 //! Modeled on the other command modules: register the command on every fresh
@@ -40,6 +41,9 @@ const DEFAULT_RECONNECT_MAX_SECS: u32 = 30;
 /// (The operator can raise the side cap in code if they truly want a d10^9.)
 const MAX_DICE: u32 = 100;
 const MAX_SIDES: u32 = 1_000_000_000;
+
+/// At most this many dice GROUPS in one `!roll` (e.g. `5d20 3d3 4d4` is 3).
+const MAX_GROUPS: usize = 8;
 
 // ── config ────────────────────────────────────────────────────────────────
 
@@ -126,6 +130,16 @@ fn parse_roll(arg: &str) -> Option<(u32, u32)> {
     Some((count, sides))
 }
 
+/// Parse one or more space-separated dice specs: `5d20`, `d20`, `5d20 3d3 4d4`.
+/// Returns every group, or None if any token is malformed or there are too many.
+fn parse_rolls(arg: &str) -> Option<Vec<(u32, u32)>> {
+    let groups: Vec<(u32, u32)> = arg.split_whitespace().map(parse_roll).collect::<Option<_>>()?;
+    if groups.is_empty() || groups.len() > MAX_GROUPS {
+        return None;
+    }
+    Some(groups)
+}
+
 /// Roll `count` dice of `sides`, returning each face. Uses an inclusive range.
 fn roll(count: u32, sides: u32) -> Vec<u32> {
     let mut rng = rand::thread_rng();
@@ -134,16 +148,43 @@ fn roll(count: u32, sides: u32) -> Vec<u32> {
 
 /// The chat reply for a `!roll` invocation, or `None` when the args are unusable.
 fn roll_reply(handle: &str, arg: &str) -> Option<String> {
-    let (count, sides) = parse_roll(arg)?;
-    let faces = roll(count, sides);
+    let groups = parse_rolls(arg)?;
     let who = if handle.is_empty() { "you".to_string() } else { handle.to_string() };
-    if count == 1 {
-        Some(format!("🎲 {who} rolled d{sides}: {}", faces[0]))
-    } else {
-        let sum: u32 = faces.iter().sum();
-        let shown = faces.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(" + ");
-        Some(format!("🎲 {who} rolled {count}d{sides}: {shown} = {sum}"))
+
+    // A single group keeps the original compact line.
+    if groups.len() == 1 {
+        let (count, sides) = groups[0];
+        let faces = roll(count, sides);
+        return Some(if count == 1 {
+            format!("🎲 {who} rolled d{sides}: {}", faces[0])
+        } else {
+            let sum: u32 = faces.iter().sum();
+            let shown = faces.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(" + ");
+            format!("🎲 {who} rolled {count}d{sides}: {shown} = {sum}")
+        });
     }
+
+    // Several groups: each group's faces + its own total, then the grand total.
+    let mut spec = Vec::new();
+    let mut parts = Vec::new();
+    let mut total: u32 = 0;
+    for &(count, sides) in &groups {
+        let faces = roll(count, sides);
+        let sum: u32 = faces.iter().sum();
+        total += sum;
+        spec.push(format!("{count}d{sides}"));
+        if count == 1 {
+            parts.push(format!("{count}d{sides} = {}", faces[0]));
+        } else {
+            let shown = faces.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(" + ");
+            parts.push(format!("{count}d{sides}: {shown} = {sum}"));
+        }
+    }
+    Some(format!(
+        "🎲 {who} rolled {}: {} (total {total})",
+        spec.join(" + "),
+        parts.join(" | ")
+    ))
 }
 
 fn coin_reply(handle: &str) -> String {
@@ -152,7 +193,7 @@ fn coin_reply(handle: &str) -> String {
     format!("🪙 {who} flipped… {side}!")
 }
 
-const USAGE: &str = "usage: !roll [<n>]d<m> (e.g. !roll d20, !roll 5d20, !roll 2d6), or !coinflip";
+const USAGE: &str = "usage: !roll [<n>]d<m> […] (e.g. !roll d20, !roll 5d20 3d3 4d4), or !coinflip";
 
 /// Extract everything after `<flag><command>` verbatim.
 fn strip_command(raw: &str, flag: &str, name: &str) -> String {
@@ -439,6 +480,29 @@ mod tests {
         assert_eq!(parse_roll("20"), Some((1, 20)));
         assert_eq!(parse_roll("2d6"), Some((2, 6)));
         assert_eq!(parse_roll(" D100 "), Some((1, 100)));
+    }
+
+    #[test]
+    fn parses_multiple_groups() {
+        assert_eq!(parse_rolls("5d20 3d3 4d4"), Some(vec![(5, 20), (3, 3), (4, 4)]));
+        assert_eq!(parse_rolls("d20"), Some(vec![(1, 20)]));
+        assert_eq!(parse_rolls("  2d6   1d4 "), Some(vec![(2, 6), (1, 4)]));
+        // A malformed token rejects the whole thing; an empty arg is None.
+        assert_eq!(parse_rolls("5d20 nope"), None);
+        assert_eq!(parse_rolls(""), None);
+        // Too many groups is rejected.
+        let many = std::iter::repeat_n("d6", MAX_GROUPS + 1).collect::<Vec<_>>().join(" ");
+        assert_eq!(parse_rolls(&many), None);
+    }
+
+    #[test]
+    fn multiple_groups_report_each_total_and_the_sum() {
+        let reply = roll_reply("bob", "5d20 3d3 4d4").expect("parses");
+        assert!(reply.contains("5d20") && reply.contains("3d3") && reply.contains("4d4"), "{reply}");
+        assert!(reply.contains("total"), "{reply}");
+        // A single group keeps the original compact form (no "total").
+        let one = roll_reply("bob", "2d6").expect("parses");
+        assert!(one.contains("2d6") && !one.contains("total"), "{one}");
     }
 
     #[test]
