@@ -152,7 +152,7 @@ fn coin_reply(handle: &str) -> String {
     format!("🪙 {who} flipped… {side}!")
 }
 
-const USAGE: &str = "usage: !roll d<n> (e.g. !roll d20), or !coinflip";
+const USAGE: &str = "usage: !roll [<n>]d<m> (e.g. !roll d20, !roll 5d20, !roll 2d6), or !coinflip";
 
 /// Extract everything after `<flag><command>` verbatim.
 fn strip_command(raw: &str, flag: &str, name: &str) -> String {
@@ -199,7 +199,7 @@ async fn register_commands(
                 Command {
                     command_name: ROLL_COMMAND.to_string(),
                     command_flag: command_flag.to_string(),
-                    command_description: "roll dice — !roll d<n>".to_string(),
+                    command_description: "roll dice — !roll [<n>]d<m> (e.g. !roll 5d20)".to_string(),
                     command_flags: vec![],
                 },
                 Command {
