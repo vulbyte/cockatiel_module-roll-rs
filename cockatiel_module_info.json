@@ -36,6 +36,12 @@
       "sensitive": false
     },
     {
+      "key": "data_dir",
+      "label": "Data directory (holds bans.json)",
+      "list": false,
+      "sensitive": false
+    },
+    {
       "key": "reconnect_base_secs",
       "label": "Reconnect base (s)",
       "list": false,
